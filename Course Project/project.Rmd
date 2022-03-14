@@ -1,0 +1,509 @@
+---
+title: "Investigating the Impacts of Cumulative COVID-19 Cases on GDP Growth Rates Between Countries"
+author: "Justin Yeh 918604585 Group 1" 
+date: "3/2/2022"
+output: 
+  html_document:
+    theme: united
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, echo = TRUE, fig.align='center', warning=F)
+library(tidyverse)
+library(gridExtra)
+library(scales)
+library(lubridate)
+library(ggplot2)
+library(htmltab)
+library(readxl)
+library(gsubfn)
+library(car)
+library(glmnet)
+library(kableExtra)
+library(ggrepel)
+library(pander)
+library(ggpubr)
+library(ggforce)
+
+```
+
+# Introduction
+
+```{r echo = F, results = F, message = F}
+COVID <- read_csv("https://COVID19.who.int/WHO-COVID-19-global-data.csv") %>% filter(Date_reported>= "2020-01-03", Date_reported<= "2021-12-31")%>%filter(WHO_region != "Other")
+write_csv(COVID,file="./Data/WHO-COVID-19-backup.csv")
+COVID2 <- COVID %>%
+  group_by(Country) %>%
+  summarise(Cumulative_Cases = sum(New_cases),)
+COVID2[226,"Country"] <- "United States"
+COVIDselect <- COVID %>%
+  mutate(WHO_region = fct_recode(WHO_region,
+                                 "Eastern Mediterranean"="EMRO",
+                                 "Europe" = "EURO","Africa" = "AFRO",
+                                 "Western Pacific" = "WPRO","Americas"="AMRO",
+                                 "South-East Asia" = "SEARO"),
+         Country = gsub("United States of America", "United States", `Country`)) %>% select(Country_code, WHO_region, Country)
+COVID3 <- merge(COVID2, COVIDselect, by = "Country") %>% group_by(Country)
+COVID4 <- unique(COVID3) %>% as.data.frame()
+COVID4[25,"Country"] <- "Bolivia"
+COVID4[115,"Country"] <- "Laos"
+COVID4[112,"Country"] <- "Kosovo"
+COVID4[136,"Country"] <- "Micronesia"
+COVID4[171,"Country"] <- "South Korea"
+COVID4[172,"Country"] <- "Moldova"
+COVID4[175,"Country"] <- "Russia"
+COVID4[211,"Country"] <- "United Kingdom"
+COVID4[212,"Country"] <- "Timor Leste"
+COVID4[225,"Country"] <- "Tanzania"
+COVID4[232,"Country"] <- "Vietnam"
+
+url <- "https://en.wikipedia.org/wiki/List_of_countries_by_real_GDP_growth_rate"
+rate.gdp <- htmltab(url, which = 2) %>% as_tibble%>%slice(-25) %>%rename(Country = 'Country/region')%>% 
+  mutate(gdp.growth.rate = as.numeric(gsub("−","-", `Real GDP growthrate (%)`)))
+#df <- data.frame(COVID4$Country,rate.gdp$Country)
+rate.gdp[148,"Country"] <- "Congo"
+rate.gdp[56,"Country"] <- "Nepal"
+rate.gdp[74,"Country"] <- "Switzerland"
+
+gdp.COVID <- merge(rate.gdp[,c(2,4)], COVID4, by = "Country", all.y=T) #193 countries to 163 countries and recovered 10 countries after fixing names
+gdp.COVID.narm <- gdp.COVID %>% na.omit()
+
+exchange.rates <- read_excel("Data/exchangerates.xlsx") %>% rename(Country = "...1")
+exchange.rates2021<- exchange.rates[,c(1,7)] %>%
+  mutate(exchange.rate = as.numeric(`2021`)) 
+
+exchange.rates2021[93,"Country"] <- "South Korea"
+exchange.rates2021[43,"Country"] <- "Democratic Republic of the Congo"
+exchange.rates2021[95,"Country"] <- "Kyrgyzstan"
+
+gdp.COVID.exr <- merge(gdp.COVID.narm, exchange.rates2021[,c(1,3)], by = "Country", all.x=T)
+#remove missing values
+gdp.COVID.exr.narm <- gdp.COVID.exr %>% na.omit() #161 countries now recovered some by fixing names but rest from missing data
+
+url.reserves <- "https://en.wikipedia.org/wiki/List_of_countries_by_foreign-exchange_reserves"
+reserves <- htmltab(url.reserves, which = 1) %>% as_tibble%>%
+  mutate(ex.res = as.integer(gsub(",", "", `Foreign exchangereserves(millions of US$)`)),
+         Country = str_trim(`Country or region`, side = 'left')) %>%print
+reserves[165,"Country"] <- "Micronesia"
+reserves[163,"Country"] <- "Congo"
+
+ggr.cc.er.eres <- merge(gdp.COVID.exr.narm,reserves[,c(6,7)],by = "Country", all.x=T) # no lost countries this time
+
+inflation <- read_excel("Data/inflation.xls")
+inf <- inflation[,c(1,43)]%>%rename(Country = "Inflation rate, average consumer prices (Annual percent change)") %>%
+  mutate(inflation = as.numeric(gsub(",", "",`2021`)))
+inf[96,"Country"] <- "Laos"
+inf[95,"Country"] <- "Kyrgyzstan"
+inf[115,"Country"] <- "Micronesia"
+inf[145,"Country"] <- "Russia"
+inf[158,"Country"] <- "Slovakia"
+inf[92,"Country"] <- "South Korea"
+inf[162,"Country"] <- "South Sudan"
+inf[41,"Country"] <- "Democratic Republic of the Congo"
+inf[42,"Country"] <- "Congo"
+inf[38,"Country"] <- "China"
+inf[162,"Country"] <- "South Sudan"
+
+
+ggr.cc.er.eres.ir <- merge(ggr.cc.er.eres, inf[,c(1,3)], by = "Country", all.x=T)
+ggr.cc.er.eres.ir.narm <- ggr.cc.er.eres.ir %>% na.omit()
+
+url.fdi <- "https://en.wikipedia.org/wiki/List_of_countries_by_received_FDI"
+fdi <- htmltab(url.fdi, which = 2) %>% as_tibble%>% 
+  mutate(fdi = as.numeric(gsub(",", "",`Stock of FDI at home  (millions of USD)`)),
+         Country = str_trim(`Country`, side = 'left'))
+  
+ggr.cc.er.eres.ir.fdi <- merge(ggr.cc.er.eres.ir.narm, fdi[,c(2,5)], by = "Country", all.x=T) 
+ggr.cc.er.eres.ir.fdi[is.na(ggr.cc.er.eres.ir.fdi)] <- 0 #convert NA's to 0 because missing data most likely indicates that these countries did not receive american investment
+
+url.smc <- "https://en.wikipedia.org/wiki/List_of_countries_by_stock_market_capitalization"
+smc <- htmltab(url.smc, which = 1) %>% as_tibble%>%
+  mutate(smc = as.numeric(gsub(",", "",`Total market cap(in mil. US$)`)),
+         Country = str_trim(`Country`, side = 'left'))
+
+ggr.cc.er.eres.ir.fdi.smc <- merge(ggr.cc.er.eres.ir.fdi, smc[,c(2,7)], by = "Country", all.x=T)
+ggr.cc.er.eres.ir.fdi.smc[is.na(ggr.cc.er.eres.ir.fdi.smc)] <- 0 #convert NA's to 0 because missing data most likely indicates that these countries do not have a significant share in the stock market
+
+pop.url <- "https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population"
+pop <- htmltab(pop.url, which = 1) %>% as_tibble %>%
+  mutate(population = as.numeric(gsub(",", "",Population)),
+         Country = str_trim(`Country / Dependency`, side = 'left'))
+pop[17,"Country"] <- "Democratic Republic of the Congo"
+pop.join <- merge(ggr.cc.er.eres.ir.fdi.smc,pop[,c(8,9)],by="Country",all.x=T)
+
+gdp2020 <- read_xls("Data/gdp.xls") 
+g <- gdp2020 %>% mutate(GDP_Growth_Rate_Pct_Change = (as.numeric(gdp2020$`2021`) - as.numeric(gdp2020$`2020`))) %>% 
+  rename(Country = `Real GDP growth (Annual percent change)`)
+h <- g[,c("Country", "2020","2021","GDP_Growth_Rate_Pct_Change")]
+
+final <- pop.join %>% rename(GDP_Growth_Rate = gdp.growth.rate, Exchange_Rate = exchange.rate, Foreign_Exchange_Reserves = ex.res, Inflation = inflation, Foreign_Direct_Investment = fdi, Stock_Market_Capitalization = smc, Population = population) %>%
+  mutate(Cumulative_Cases_PC = Cumulative_Cases/Population)
+final <- merge(final, g[,c("Country", "GDP_Growth_Rate_Pct_Change")], by = "Country", all.x = T) %>% na.omit()
+final2 <- final[-80,] #remove libya because big outlier
+```
+
+In this project, we will be looking primarily looking at the COVID-19 data provided by the World Health Organization (WHO) which contains well over 100,000 observations and 8 variables: Date_reported, Country_code, Country, WHO_region, New_cases, Cumulative_cases, New_deaths, Cumulative_deaths. ***The primary question I want to investigate regarding COVID-19 is: does cumulative COVID cases significantly impact GDP growth rate by country?*** If so, then our ***secondary question of interest will be to see how much of an impact cumulative COVID-19 cases has on GDP growth rate and the different impacts between regions of the world.*** Therefore, the only relevant variables we will need from the WHO COVID-19 dataset are Country, WHO region, and cumulative cases. The other predictor variables included in the final dataset are Exchange Rate, Foreign Exchange Reserves, Inflation, Foreign Direct Investment, and Stock Market Capitalization. These predictor variables were gathered from reputable sources like the World Bank, IMF, and CIA World Factbook.
+
+
+
+***
+
+# Background
+
+The coronavirus (COVID-19) was first identified in Wuhan City, Hubei Province, China on December 31, 2019 and the outbreak was officially declared a global health emergency on January 30, 2020 by the WHO. COVID-19 had flu like symptoms and was very contagious which lead it to spread quickly around the world. This led many countries to pursue public health policies that halted their economies through lockdowns and social distancing. Due to the instability of the COVID pandemic, stock markets all over the world crashed in February 2020 and global supply chains had halted . Not only had the COVID pandemic become a global health crisis but it had also led to a global economic crisis.
+
+***
+
+# Descriptive Analysis
+```{r echo = F}
+#kbl(summary(final)[,c(1,2,12,5,3,5,6,7,8,9,10)], caption = "**Summary Statistics of Dataset**") %>%
+    #kable_classic(full_width = F, html_font = "Cambria")
+#pairs(final[c(2,3,6,7,8,9,10,11,12)])
+#pander(summary(final))
+```
+
+The WHO dataset has over 200 countries but when combining the other datasets the number of countries was reduced to 163. This was because of missing data for some small countries. Countries were recovered as much as possible by renaming countries to the same names. Missing data in 2021 for exchange rate and inflation were replaced with the most recent data from previous years. Missing data for foreign direct investment was replaced with 0's because missing data most likely indicates that these countries did not receive a significant amount of American investment. Similarly for stock market capitalization, missing data was replaced with 0's because missing data most likely indicates that these countries do not have a significant share in the stock market.
+
+The main variable we are investigating is cumulative COVID cases so it is important to standardize it. It was standardized to cumulative COVID cases per 1 million population. 1 million was chosen because we are comparing between countries so the population size is much larger than if we were just to compare between states or small regions. Furthermore, the COVID-19 data is filtered to only include data from "2020-01-03" to "2021-12-31". Data past 2021 is not included because future data cannot be used to predict GDP growth rates in 2021.
+
+It is common practice to log transform growth rate data because growth rates increase exponentially and taking the log of growth rates will return a very close approximation of the percent change and linearize the exponential curve. Since we only have one year worth of data it is not capturing multiple years. One year is just looking at the health status of the economy and we are using GDP growth rate to see the resiliency of each country's economy. Therefore, taking the raw difference between GDP growth rates from 2021 and 2020 will be a sufficient replacement for log transformations because this will give us the percent change of the GDP growth rate in one year.
+
+```{r echo=F, message=F}
+hist1 <- ggplot(data=final, aes(x=final$Cumulative_Cases_PC)) + geom_histogram(fill="red",bins=20) + labs(title="") + xlab("Cumuluative Covid Cases Per Capita")
+
+hist2 <- ggplot(data=final, aes(x=final$Inflation)) + geom_histogram(fill="blue",bins=20) + labs(title="") + xlab("Inflation")
+
+hist3 <- ggplot(data=final, aes(x=final$Exchange_Rate)) + geom_histogram(fill="purple",bins=20) + labs(title="") + xlab("Exchange Rate") + coord_flip()
+
+hist4 <- ggplot(data=final, aes(x=final$Foreign_Exchange_Reserves)) + geom_histogram(fill="green",bins=20) + labs(title="") + xlab("Foreign Exchange Reserves")
+
+hist5 <- ggplot(data=final, aes(x=final$Foreign_Direct_Investment)) + geom_histogram(fill="orange",bins=20) + labs(title="") + xlab("Foreign Direct Investment") + coord_flip()
+
+hist6 <- ggplot(data=final, aes(x=final$WHO_region)) + geom_bar(fill="brown") + labs(title="") + xlab("WHO Region") + coord_flip()
+
+hist7 <- ggplot(data=final, aes(x=final$Stock_Market_Capitalization)) + geom_histogram(fill="yellow") + labs(title="") + xlab("Stock Market Capitalization") + coord_flip()
+
+hist8 <- ggplot(data=final,aes(x=final$GDP_Growth_Rate_Pct_Change)) + geom_histogram(fill="cyan") + labs("") + xlab("GDP Growth Rate % Change")
+
+#summary(covid_df)
+hists <- ggarrange(hist1,hist2,hist4,hist3,hist5,hist7,hist6,hist8,nrow=3,ncol=3,common.legend=T,legend="bottom")
+annotate_figure(hists, top="Histograms of Dataset covariates")
+```
+
+The histograms show that the distributions for the predictor variables are all right skewed because their values cannot be less than zero. Furthermore, for cumulative covid cases per capita all the values are less than 1 because there cannot be more covid cases than the population. We also see that most of the countries in this dataset are in the Europe, Africa, and Americas region. The GDP growth rate percent change for most countries is around 10%.
+
+When looking at cumulative cases per capita all the values are very small decimals. This is because there cannot be more COVID cases than the population. COVID cases per capita is used instead of per 1 million or 100 thousand population because when performing linear regression the estimated coefficient is too small to interpret the impact of COVID cases on GDP growth rate percent. Therefore, we standardize cumulative casese by per capita so we do not run into this problem.
+
+
+```{r echo=F}
+t <- cor(final[c(13,12,7,3,6,8,9,10,11)])%>% as.data.frame()
+#pander(t)
+```
+
+--------------------------------------------------------------
+             &nbsp;                GDP_Growth_Rate_Pct_Change 
+--------------------------------- ----------------------------
+     **Cumulative_Cases_PC**                 0.2199           
+
+  **Foreign_Exchange_Reserves**              0.0277           
+
+      **Cumulative_Cases**                  0.03857           
+
+        **Exchange_Rate**                   -0.09954          
+
+          **Inflation**                     0.03625           
+
+  **Foreign_Direct_Investment**             0.00851           
+
+ **Stock_Market_Capitalization**            0.001812          
+
+         **Population**                    -0.0008783         
+--------------------------------------------------------------
+
+The correlation table shows that there are no predictor variables with strong correlation to GDP growth rate. Cumulative cases per capita has a positive correlation which may seem counter intuitive at first. However, the interpretation of this will be left to later analysis after linear regression has been performed.
+
+```{r echo=F, message=F}
+p = ggplot(final2, aes(y = GDP_Growth_Rate_Pct_Change, x = Cumulative_Cases_PC)) + geom_point(aes(color = Country, size=Inflation))
+p = p + theme_classic() 
+p = p + theme(legend.position = "none")
+p = p + labs(title="GDP Growth Rate % Change vs Cumulative Cases Per Capita")
+p = p + geom_text_repel(aes(label=ifelse(GDP_Growth_Rate>5|GDP_Growth_Rate<(-10), Country, "")),hjust=0, vjust=0,size=4.5)
+#p = p + geom_text_repel(aes(label=ifelse(Country == "United States"|Country == "United Kingdom"|Country == "France"|Country == "Germany", Country, "")),hjust=0, vjust=0,size=4.5)
+p = p + theme(axis.text=element_text(size=14,face="bold"), axis.title=element_text(size=18))
+p = p + ylab("GDP GR % Change")
+p = p + xlab("Cumulative Cases Per Capita")
+p = p + geom_smooth(method='lm', formula= y~x^2, se = FALSE) #use nonlinear relationship
+p
+```
+It seems that from this graph that as cumulative cases per capita increases the GDP growth rate percent change also increases. This is consistent with the correlation table from above. We notice some outliers in this graph like the Maldives and Guyana. We will have to see if we have to remove these outliers in a later sensitivity analysis.
+
+```{r echo=F}
+# Aggregate by region
+regions = aggregate( Cumulative_Cases_PC ~ WHO_region, final2, mean )
+# Create Factor for plotting
+regions$WHO_region = factor(regions$WHO_region, levels = regions$WHO_region[order(regions$Cumulative_Cases_PC, decreasing=FALSE)])
+p = ggplot(regions, aes(x=WHO_region, y=Cumulative_Cases_PC)) + geom_bar(stat="identity",fill="darkblue") 
+p = p + ggtitle("Average Number of Coronavirus Cases per 1M Population")
+p = p + theme(plot.title = element_text(hjust = 0.5))
+p = p + theme(axis.text=element_text(size=13,face="bold"), axis.title=element_text(size=13), axis.title.y=element_blank())
+p = p + theme(plot.title = element_text(size=12,face="bold"))
+p = p + ylab("Cases per 1M Population") + guides(fill=FALSE)
+p = p + coord_flip()
+p
+```
+We can see that the European and American region have the most COVID-19 cases while the Western Pacific(East Asia) and Africa have the least amount of COVID-19 cases.
+
+***
+
+# Inferential Analysis
+#### Notation
+
+***Model:*** $\mathbf {y} =X{\boldsymbol {\beta }}+{\boldsymbol {\varepsilon }} \qquad i = 1,2,..., 152$
+
+$\mathbf {y}={\begin{pmatrix}y_{1}\\y_{2}\\\vdots \\y_{63}\end{pmatrix}},\quad$
+
+$X={\displaystyle {\begin{pmatrix}\mathbf {x} _{1}^{\mathsf {T}}\\\mathbf {x} _{2}^{\mathsf {T}}\\\vdots \\\mathbf {x} _{63}^{\mathsf {T}}\end{pmatrix}}={\begin{pmatrix}1&x_{11}&\cdots &x_{16}\\1&x_{21}&\cdots &x_{26}\\\vdots &\vdots &\ddots &\vdots \\1&x_{631}&\cdots &x_{636}\end{pmatrix}},}$
+
+${\displaystyle {\boldsymbol {\beta }}={\begin{pmatrix}\beta _{0}\\\beta _{1}\\\beta _{2}\\\vdots \\\beta _{6}\end{pmatrix}},\quad {\boldsymbol {\varepsilon }}={\begin{pmatrix}\varepsilon _{1}\\\varepsilon _{2}\\\vdots \\\varepsilon _{63}\end{pmatrix}}.}$
+
+${\displaystyle y_{i}=\beta _{0}+\beta _{1}X_{i1}+\beta _{2}X_{i2}+\ldots +\beta _{6}X_{i6}+\epsilon _{i}}$
+
+$y_i$ = Percent Change of GDP Growth Rate from 2020 to 2021
+
+$\beta_{p}$ is the change in GDP growth rate percent change for every one increase in $X_{ij}$
+
+$p=6$ for the number of predictor variables
+
+$X_{i1}$: Cumulative Cases Per Capita
+
+$X_{i2}$: Exchange Rate
+
+$X_{i3}$: Foreign Exchange Reserves
+
+$X_{i4}$: Inflation
+
+$X_{i5}$: Foreign Direct Investment
+
+$X_{i6}$: Stock Market Capitalization
+
+***The assumptions for our model will be:*** $\epsilon$ is independent and identically distributed and $\epsilon \sim \mathcal{N}(\mu,\sigma^2)$
+
+***Hypothesis Testing with a significance level of $\alpha$ = 0.5***
+
+\begin{align*}
+   H_0 & : \beta_1=0
+   \\
+   H_a & : \beta_1\not=0
+\end{align*}
+
+***
+
+#### Explanation
+
+This model is appropriate for finding if COVID cases has a significant impact on GDP growth rates because it seems that their relationship is linear. By using this model we will also be able to quantify the effect COVID cases has on GDP growth rates. The other predictor variables are included because they are common economic indicators used to assess how a country's economy is doing. Furthermore, they were selected based on a study (linked in the references) that found that these covariates had a significant impact on the GDP of India.
+
+***
+
+#### Results
+```{r echo=F}
+model <- lm(GDP_Growth_Rate_Pct_Change~Cumulative_Cases_PC+Exchange_Rate+Foreign_Exchange_Reserves+Inflation+Foreign_Direct_Investment+Stock_Market_Capitalization,data = final2)
+#pander(summary(model)$coefficients)
+```
+
+---------------------------------------------------------------------------------
+             &nbsp;                 Estimate    Std. Error   t value   Pr(>|t|)  
+--------------------------------- ------------ ------------ --------- -----------
+         **(Intercept)**             4.861        0.8881      5.473    **1.909e-07** 
+
+     **Cumulative_Cases_PC**         56.19        8.573       6.554    **9.314e-10** 
+
+        **Exchange_Rate**          -0.0002158    0.000207    -1.043     0.2989   
+
+  **Foreign_Exchange_Reserves**    2.258e-06     3.45e-06    0.6544     0.5139   
+
+          **Inflation**             0.01139      0.03016     0.3776     0.7063   
+
+  **Foreign_Direct_Investment**    -1.22e-06    1.209e-06    -1.009     0.3148   
+
+ **Stock_Market_Capitalization**   2.093e-08    2.055e-07    0.1018     0.9191   
+---------------------------------------------------------------------------------
+
+
+Our results show that Cumulative Cases Per Capita is significant (p-value $\approx$ 9.314e-10 < 0.05). Thus, we can reject $H_0: \beta_1=0$ and accept $H_a: \beta_1 \not=0$.
+
+The coefficient estimate for $\beta_1\approx56.19$ which means for every 1 increase in cumulative cases per capita the GDP growth rate percent change increases by approximately 5.545e+01. This may seem counter intuitive at first because one would think that the COVID-19 pandemic has negatively impacted economies all over the world, which is true. However, our model is analyzing the impact of COVID cases per capita on the GDP growth rate percent change from 2020 to 2021 (so just one year and not the overall impact). This result may suggest that over time economies have become more resilient to the pandemic and have begun to slowly recover even as COVID cases continue to spread.
+
+*** 
+
+### Lasso Regression
+
+I want to investigate if cumulative cases has a nonlinear relationship with gdp growth rate.
+
+***Model Selection*** with degree of 15
+```{r echo=F}
+set.seed(10)
+M = 15 
+cases.expand = poly(final$Cumulative_Cases_PC, degree = M, raw = F)
+p.mod <- cv.glmnet(x = cases.expand, y = final$GDP_Growth_Rate_Pct_Change, alpha=1)
+plot(p.mod)
+cat("Polynomial terms:")
+coef(p.mod, s = "lambda.min") 
+
+#y <- final[,2]#second column is gdp growth rate the response variable
+#x <- poly(final$Cumulative_Cases_PC, degree = 3, raw = F)
+```
+
+The last polynomial term is degree 10. Therefore, the model will be including all the polynomial terms before it even if they were not chosen because having 10 polynomial terms tends to best generalize new data. Lasso regression is used because only one predictor variable is significant (Cumulative Cases Per Capita) and lasso is good when there are very few significant predictor variables. Additionally, we will be investigating the difference between regions so with lasso we will be using 10 polynomial terms with WHO region as the interaction term. The model will only include cumulative cases per capita because this report is specifically dedicated to investigating the impacts of COVID cases on percent change of GDP growth rate. The impacts of the other covariates from the previous model will have to be further investigated in future studies.
+
+Our new model will be:
+
+***Model:*** ${Y_i} = \beta_0+{\displaystyle \sum _{j=1}^{10}(\beta_jX^j+\beta_{ji}X^j)} \qquad i = 1,2,..., 5$
+
+In this model, $Y_i$ represents the GDP growth rate percent change from 2020 to 2021 for each WHO region. $\beta_0$ represents the intercept term. $X$ represents cumulative cases per capita. $\beta_i$ represents the coefficient for cumulative cases per capita and $\beta_{ij}$ represents the coefficient term for the interaction between cumulative cases per capita and WHO region.
+
+This model seeks to investigates if cumulative cases per capita has a non linear relationship with GDP growth rate percent change and will show us the trend between the polynomial terms and GDP growth rate percent change.
+ 
+***The assumptions for our model will be:*** $\epsilon$ is independent and identically distributed and $\epsilon \sim \mathcal{N}(\mu,\sigma^2)$
+
+***Hypothesis Testing with a significance level of $\alpha$ = 0.5***
+
+\begin{align*}
+   H_0 & : \beta_j=0
+   \\
+   H_a & : \beta_j\not=0
+\end{align*}
+
+***
+
+***Results***
+
+```{r echo=F, results=T}
+pmod <- lm(GDP_Growth_Rate_Pct_Change~Cumulative_Cases_PC+I(Cumulative_Cases_PC^2)+I(Cumulative_Cases_PC^3)+I(Cumulative_Cases_PC^4)+I(Cumulative_Cases_PC^5)+I(Cumulative_Cases_PC^6)+I(Cumulative_Cases_PC^7)+I(Cumulative_Cases_PC^8)+I(Cumulative_Cases_PC^9)+I(Cumulative_Cases_PC^10),data=final2)
+
+
+pmod2 <- lm(GDP_Growth_Rate_Pct_Change~Cumulative_Cases_PC*WHO_region+I(Cumulative_Cases_PC^2)*WHO_region+I(Cumulative_Cases_PC^3)*WHO_region+I(Cumulative_Cases_PC^4)*WHO_region+I(Cumulative_Cases_PC^5)*WHO_region+I(Cumulative_Cases_PC^6)*WHO_region+I(Cumulative_Cases_PC^7)*WHO_region+I(Cumulative_Cases_PC^8)*WHO_region+I(Cumulative_Cases_PC^9)*WHO_region+I(Cumulative_Cases_PC^10)*WHO_region,data = final2)
+
+```
+
+```{r echo=F}
+x <- final2$Cumulative_Cases_PC
+
+region.americas<-function(x){
+  return(3.740*x +  3.103e+05*x^2 + -2.492e+07*x^3 + 7.508e+08*x^4 + -1.010e+10*x^5 +  5.934e+10*x^6 + -1.066e+11*x^7 + -7.933e+10*x^8 + 1.744e+11*x^9 + -1.531e+11*x^10 + 4.937e+04*x + -6.889e+06*x^2 + 4.372e+08*x^3 + 4.00e-05*x^4 + 3.188e+11*x^5 + -4.221e+12*x^6 + 3.569e+13*x^7 + -1.869e+14*x^8 + 5.501e+14*x^9 + -6.941e+14*x^10)
+}
+
+region.eastmed <- function(x){
+  return(3.740*x +  3.103e+05*x^2 + -2.492e+07*x^3 + 7.508e+08*x^4 + -1.010e+10*x^5 +  5.934e+10*x^6 + -1.066e+11*x^7 + -7.933e+10*x^8 + 1.744e+11*x^9 + -1.531e+11*x^10 +  2.491e+04*x + -8.780e+06*x^2 + 1.052e+09*x^3 + -5.854e+10*x^4 + 1.720e+12*x^5 + -2.785e+13*x^6 + 2.397e+14*x^7 + -9.003e+14*x^8 + 5.577e+15*x^10)
+} #polynomial term 9 not included bc missing value
+
+region.europe <- function(x){
+  return(3.740*x +  3.103e+05*x^2 + -2.492e+07*x^3 + 7.508e+08*x^4 + -1.010e+10*x^5 +  5.934e+10*x^6 + -1.066e+11*x^7 + -7.933e+10*x^8 + 1.744e+11*x^9 + -1.531e+11*x^10 +  1.285e+02*x + -2.472e+05*x^2 + 2.321e+07*x^3 + -7.321e+08*x^4 + 1.010e+10*x^5 + -6.115e+10*x^6 + 1.244e+11*x^7)
+} #polynomial terms after 7 not included bc missing values
+
+region.SEAsia <- function(x){
+  return(3.740*x +  3.103e+05*x^2 + -2.492e+07*x^3 + 7.508e+08*x^4 + -1.010e+10*x^5 +  5.934e+10*x^6 + -1.066e+11*x^7 + -7.933e+10*x^8 + 1.744e+11*x^9 + -1.531e+11*x^10 +  -1.842e+04*x + 1.885e+06*x^2 + -7.066e+07*x^3 + 1.009e+09*x^4 + -3.010e+09*x^5)
+} #polynomial terms after 5 not included bc missing values
+
+region.westpac <- function(x){
+  return(3.740*x +  3.103e+05*x^2 + -2.492e+07*x^3 + 7.508e+08*x^4 + -1.010e+10*x^5 +  5.934e+10*x^6 + -1.066e+11*x^7 + -7.933e+10*x^8 + 1.744e+11*x^9 + -1.531e+11*x^10 +  -1.189e+02*x + 3.919e+05*x^2 + -6.829e+07*x^3 + 4.313e+09*x^4 + -1.184e+11*x^5 + 1.471e+12*x^6 + -6.865e+12*x^7 + 2.421e+14*x^10)
+} #polynomial terms after 5 not included bc missing values
+
+noninteract <- ggplot()+geom_point(aes(x=x,y=pmod$fitted.values),color="red") + xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("Polynomial Terms w/out Interaction")
+
+americas <- ggplot() + geom_point(aes(x=x,y=region.americas(x)),color="blue") + xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("WHO Region: Americas")
+
+eastmed <- ggplot() + geom_point(aes(x=x,y=region.eastmed(x)),color="orange") +xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("WHO Region: Eastern Mediterranean")
+
+eur <- ggplot() + geom_point(aes(x=x,y=region.europe(x)),color="yellow") +xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("WHO Region: Europe")
+
+seasia <- ggplot() + geom_point(aes(x=x,y=region.SEAsia(x)),color="green") +xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("WHO Region: South East Asia")
+
+westpac <- ggplot() + geom_point(aes(x=x,y=region.westpac(x)),color="purple") +xlab("Cumulative Cases Per Capita") + ylab("GDP GR % Change") + ggtitle("WHO Region: Western Pacific")
+
+grid.arrange(noninteract,americas,eastmed,eur,seasia,westpac)
+```
+Our model shows us that for most regions GDP growth rate percent change strangely increases as cumulative cases per capita. However, this is consistent with our interpretation of the previous model where economies become more resilient to the COVID-19 as cases continue to spread. It is important to note that the actual quantitative value of GDP growth rate percent change is not important in these results. What we want to look at are the trends in each region.
+
+In the visualization of the polynomial terms without interactions we see that the relationship is a nonlinear one where GDP growth rate percent change eventually increases as cumulative cases per capita increases. The only region that does not have an increase in GDP growth rate percent change is South East Asia. This is most likely due to missing values that were unable to be extracted because there were too many predictor variables.
+
+We see in the Americas region near the end, the GDP growth rate percent change saturates a little bit. This trend most likely will continue for other regions if there was more data because it is impossible for the GDP growth rate percent change to continue to increase as cumulative cases per capita reaches one.
+
+The most important difference from the linear regression model that we see from this model is that in the beginning for most regions as cumulative COVID cases per capita increased the GDP growth rate percent change stayed flat. Only after a certain point did the GDP growth rate percent change start to increase. This may suggest that after a certain number of COVID cases, populations may have achieved herd immunity which allowed economies to start operating once again.
+
+***
+
+# Sensitivity Analysis
+
+***1st Model***
+
+Now we check the model diagnostics for our polynomial interacting with region model to see if our assumptions hold true. First we will check the assumptions of our first linear regression model.
+
+```{r echo=F}
+par(mfrow=c(1,2))
+plot(model, which=c(1,2))
+```
+For the residuals vs fitted plot the points are equally spread and we can say that the red line is close enough to the dotted line. Therefore, linearity holds true for out model. For the Normal QQ plot the residuals closely follow the dotted line without any huge deviations so we can say that the residuals are normally distributed. Thus our assumptions for the first model are shown to be true in this sensitivity analysis.
+
+***2nd Model***
+
+Now we will perform another sensitivity analysis on our second model that deals with polynomial and interaction terms.
+
+```{r echo = F}
+par(mfrow=c(1,2))
+plot(pmod2, which=c(1,2))
+
+```
+
+We see that in our residuals vs fitted plot our points are relatively spread out and the red line is close to the dotted line. Therefore, we can say that linearity holds for out model. For the Normal QQ plot, the residuals follow the dotted line pretty well so we can say that the residuals are normally distributed. The sensitivity analysis shows that our model assumptions are true.
+
+***
+
+# Discussion
+
+Our primary question of interest was answered with linear regression showing that cumulative cases per capita had a significant effect on GDP growth rate percent change. For every one increase in cumulative cases per capita the GDP growth rate percent change increases by about 56%. While this number may seem big, the actual value of the percent change is not important. What is really important is that we see a positive trend in this data. This may suggest that as COVID spreads throughout the populations, economies will become more resilient to the pandemic and will continue to grow without COVID cases negatively impacting the economy. At this point, COVID-19 will continue to spread and become endemic like the flu without having disastrous impacts on entire economies. This interpretation can also be carried onto the 2nd model that includes polynomials terms and interaction terms of the WHO regions because while the trend is no longer linear we still see a positive trend of GDP growth rate percent change increasing after a certain number of COVID cases are reached. Our secondary question of interest is also answered with the model showing that most of the regions follow the same trend. Overall in both models, our results suggest that COVID cases do not negatively impact GDP growth rate percent change from 2020 to 2021 and in fact, grows with the percent change. 
+
+However, this analysis was only done on one year's worth of data so future studies will have to investigate if this trend will continue in future economic and COVID-19 data. Furthermore, this analysis is unable to quantify the impacts of COVID-19 as seen in the previous results where the GDP growth rate percent change is too large for it to actually happen in the real world. Therefore, future studies will have to find ways to standardize the data so that they will be able to quantify the effects.
+
+***
+
+# References {-}
+
+https://www.imf.org/external/datamapper/NGDP_RPCH@WEO/OEMDC/ADVEC/WEOWORLD
+-gdp growth rate wikipedia Retrieved 2021-09-07
+
+https://www.bis.org/statistics/fx/ra.htm
+https://stats.bis.org/statx/srs/table/i3?m=A 
+- exchange rates
+
+https://en.wikipedia.org/wiki/List_of_countries_by_foreign-exchange_reserves
+- foreign reserves 
+
+https://www.imf.org/external/datamapper/PCPIPCH@WEO/OEMDC/ADVEC/WEOWORLD
+-inflation rate
+
+https://en.wikipedia.org/wiki/List_of_countries_by_received_FDI
+-acummulated fdi per country
+
+https://en.wikipedia.org/wiki/List_of_countries_by_stock_market_capitalization
+- stock market capitalization
+
+https://en.wikipedia.org/wiki/List_of_countries_and_dependencies_by_population
+- population
+
+https://people.duke.edu/~rnau/411log.htm
+
+https://www.sciencedirect.com/science/article/pii/S2212567114002056#:~:text=The%20study%20revealed%20that%20Exchange,predict%20GDP%20of%20the%20economy. - significant economic predictors of gdp growth rate
+
+
+***
+
+# Session info {-}
+
+<span style='color:blue'>
+Report information of your `R` session for reproducibility. 
+</span> 
+
+
+```{r}
+sessionInfo()
+```

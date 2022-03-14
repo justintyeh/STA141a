@@ -1,0 +1,41 @@
+---
+title: "Discussion Report"
+author: "Justin Yeh 918604585 Partners: Bin Lama 915062405, Rachel How 919829631 "
+date: "2/24/2002"
+output:
+  html_document:
+    df_print: paged
+    number_sections: yes
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+```
+
+***
+
+# Overall impression
+
+
+For the introduction of the dataset. The report meets expectations. There is a lot code combining multiple datasets so make sure to explain where you got the data from the other variables and explain them. The background of the dataset has not been written yet but the plan to talk about predictor variables is good. The descriptive analysis shows the plots but can include more description about the plots. The predictive/inferential analysis is the same as the descriptive analysis, has the methodology but needs to talk about it. Sensitivity analysis meets expectations since it includes the four diagnostic plots. Conclusion needs to be written but plan for conclusion. Make sure conclusion talks offers real world meaning of the findings. Organization needs to be improved. Make sure to clean up code so report is reproducible. Question is very good applies to the real world very well.
+
+
+The main question of this report is to find if there is a significant effect of cumulative covid cases on the gdp growth rate on countries. In the analysis we found that cumulative cases does not significantly affect gdp growth in the presence of our other predictor variables.
+
+
+# Major comments 
+
+The data is based off of 2021 but the covid data includes 2020-2022. 2020 data could be used for the gdp growth rate. However, 2022 data for covid should not be included because your gdp growth rate statistics are for 2021 so 2022 covid data cannot possibly be used to answer your primary question of how cumulative covid cases affect gdp growth rate since 2022 covid data is cannot be used to explain 2021 gdp growth rate. This can be easily fixed by just filtering the date to be just 2021 or 2020 to 2021. The teacher's github code has an example of filtering by date so you can look there.
+
+A lot of the data was lost when the datasets were merged together because many predictor variables are missing data for many countries. Try to go back to each dataset and see what was missing to see if you can recover any lost countries. Additionally, USA was missing at first because the name was inconsistent in the datasets. Sometimes it was names "United States" and other times it was named "United States of America" so check to see if you can also recover any lost data due to name inconsistencies.
+
+The spread on the diagnostic plots are good enough to say we have heteroscedasticity but if they are really concerning then robust regression and power transformations(BoxCox) could be used to get even better variance.
+
+# Minor comments 
+
+- The code can be hidden and shown at the end by using {r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+- Code is very messy so make sure to clean up code and write comments in code so that reader will understand what you are doing.
+- the pairs plot is too messy and not very necessary so instead of plotting the correlation of all variables just plot a few that seem important.
+- references are not cited correctly so make sure to cite them correctly.
+- can use latex for format the null hypothesis and model.
+
+

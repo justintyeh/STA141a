@@ -1,0 +1,158 @@
+---
+title: "Justin Yeh Progres Report"
+date: " "
+output: html_document
+---
+
+## Overview
+
+This document contains instructions on the **course project** for STA 141A Winter 2022. This document is made with `R markdown`. The `rmd` file to generate this document is available on the course website. 
+
+# Background
+
+
+
+## WHO COVID-19 data
+
+We will explore the WHO COVID-19 data in this project. You can take a look at the [weekly WHO COVID-19 update](https://www.who.int/emergencies/diseases/novel-coronavirus-2019/situation-reports) for reference.
+
+
+```{r echo=TRUE, eval=TRUE}
+library(tidyverse)
+covid <- read_csv("https://covid19.who.int/WHO-COVID-19-global-data.csv")
+summary(covid)
+```
+
+This data set is maintained by WHO and updated constantly. The first task for you is to understand this data set, e.g., the meaning of the variables and their values. To this end, you can  read the documentation for this data set or to make use of your preferred search engine. 
+
+In this project, you are a conscientious statistician, who wishes to help the *general public* (i.e., people with no training in statistics or epidemiology) understand the ongoing pandemic. 
+
+
+
+## Suggested outline 
+
+The following outline is intended to provide one viable route for your project while leaving you as much freedom as possible. 
+
+***
+
+0. Before writing your analysis report, you may want to explore this data set and read about the coronavirus to generate the questions to be answered in this report, i.e., the question(s) of interest. You can be creative on this question so long as it meets two conditions.
+
+    a. This question might be meaningful in real-world. 
+    b. A method discussed in this course is employed in solving this question (can be relaxed upon approval from the instructor or TA).
+    
+If you are uncertain whether your questions are valid, please submit a project proposal and/or check with the course instructors during office hours. 
+
+***
+
+
+1.  Introduce the dataset and the questions of interest. 
+
+2.  Review the background of the coronavirus pandemic. 
+
+3.  Explore this dataset and generate summary statistics that you find informative, and explain your findings. <span style="color:red"> The summary statistics should include at least time, number of cases, number of death, case-mortality rate.</span>
+```{r}
+library(tidyverse)
+library(gridExtra)
+library(scales)
+library(lubridate)
+library(ggplot2)
+library(htmltab)
+library(readxl)
+library(gsubfn)
+
+covid <- read_csv("https://covid19.who.int/WHO-COVID-19-global-data.csv")
+#write_csv(covid,file="./Data/WHO-Covid-19-backup.csv")
+
+
+covid <- covid %>% 
+  filter(WHO_region != "Other") %>% 
+  mutate(WHO_region = fct_recode(WHO_region,
+                                 "Eastern Mediterranean"="EMRO",
+                                 "Europe" = "EURO","Africa" = "AFRO",
+                                 "Western Pacific" = "WPRO","Americas"="AMRO",
+                                 "South-East Asia" = "SEARO"),
+         Country = gsub("United States of America", "United States", `Country`)) %>%
+  group_by(Country) %>%
+  summarise(Cumulative_Cases=sum(Cumulative_cases))
+
+str(covid)
+
+url <- "https://en.wikipedia.org/wiki/List_of_countries_by_real_GDP_growth_rate"
+rate.gdp <- htmltab(url, which = 2) %>% as_tibble%>%slice(-25) %>%rename(Country = 'Country/region')%>% 
+  mutate(gdp.growth.rate = as.numeric(gsub("−","-", `Real GDP growthrate (%)`)))
+
+exchange.rates <- read_excel("./Data/exchangerates.xlsx") %>% rename(Country = "...1")
+exchange.rates2021<- exchange.rates[,c(1,7)] %>%
+  mutate(exchange.rate = as.numeric(`2021`)) 
+#which(is.na(exchange.rates2021$`2021`))
+#countries.na <- exchange.rates2021[is.na(exchange.rates2021$rate), ] 
+
+gdp.covid <- merge(rate.gdp[,c(2,4)], covid, by = "Country")
+gdp.covid.exr <- merge(gdp.covid, exchange.rates2021[,c(1,3)], by = "Country")
+#remove missing values
+avai_id <- which(!is.na(gdp.covid.exr$exchange.rate))
+data <- gdp.covid.exr[avai_id,]
+length(unique(data$Country))
+
+url.reserves <- "https://en.wikipedia.org/wiki/List_of_countries_by_foreign-exchange_reserves"
+reserves <- htmltab(url.reserves, which = 1) %>% as_tibble%>%
+  mutate(ex.res = as.integer(gsub(",", "", `Foreign exchangereserves(millions of US$)`)),
+         Country = str_trim(`Country or region`, side = 'left')) %>%print
+
+ggr.cc.er.eres <- merge(data,reserves[,c(6,7)],by = "Country")
+
+inflation <- read_excel("./Data/inflation.xls") %>% filter
+inf <- inflation[,c(1,43)]%>%rename(Country = "Inflation rate, average consumer prices (Annual percent change)") %>%
+  mutate(inflation = as.numeric(gsub(",", "",`2021`)))
+
+ggr.cc.er.eres.ir <- merge(ggr.cc.er.eres, inf[,c(1,3)], by = "Country")
+str(inf)
+url.fdi <- "https://en.wikipedia.org/wiki/List_of_countries_by_received_FDI"
+fdi <- htmltab(url.fdi, which = 2) %>% as_tibble%>% 
+  mutate(fdi = as.numeric(gsub(",", "",`Stock of FDI at home  (millions of USD)`)),
+         Country = str_trim(`Country`, side = 'left'))
+  
+ggr.cc.er.eres.ir.fdi <- merge(ggr.cc.er.eres.ir, fdi[,c(2,5)], by = "Country")
+
+url.smc <- "https://en.wikipedia.org/wiki/List_of_countries_by_stock_market_capitalization"
+smc <- htmltab(url.smc, which = 1) %>% as_tibble%>%
+  mutate(smc = as.numeric(gsub(",", "",`Total market cap(in mil. US$)`)),
+         Country = str_trim(`Country`, side = 'left'))
+
+ggr.cc.er.eres.ir.fdi <- merge(ggr.cc.er.eres.ir.fdi, smc[,c(2,7)], by = "Country")
+head(ggr.cc.er.eres.ir.fdi)
+
+model <- lm(gdp.growth.rate~Cumulative_Cases+exchange.rate+ex.res+inflation+fdi+smc,data = ggr.cc.er.eres.ir.fdi)
+anova(model)
+```
+
+
+4.  Propose an appropriate model to answer the questions of interest. 
+      a. Explain your notation. 
+      b. State assumptions for your model. 
+      c. Explain why your model is appropriate for this task. 
+
+
+5.  Fit the proposed model in (4) and explain your results. 
+gdp growth rate = cumulative cases + inflation rate + exchange rate + foreign exchange reserves + stock market capitalization + foreign direct investment
+
+6.  Conduct model diagnostics and/or sensitivity analysis. 
+
+7.  Conclude your analysis with a discussion of your findings and caveats of your approach. 
+
+***
+# References
+
+https://www.bis.org/statistics/fx/ra.htm
+https://stats.bis.org/statx/srs/table/i3?m=A 
+- exchange rates
+
+https://en.wikipedia.org/wiki/List_of_countries_by_foreign-exchange_reserves
+- foreign reserves 
+
+https://www.imf.org/external/datamapper/PCPIPCH@WEO/OEMDC/ADVEC/WEOWORLD
+-inflation rate
+
+https://en.wikipedia.org/wiki/List_of_countries_by_received_FDI
+-acummulated fdi per country
+
